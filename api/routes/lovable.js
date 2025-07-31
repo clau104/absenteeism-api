@@ -18,6 +18,7 @@ router.use((req, res, next) => {
   next();
 });
 
+// CONFIG - Configurações do dashboard
 router.get('/config', (req, res) => {
   res.json({
     success: true,
@@ -60,227 +61,75 @@ router.get('/config', (req, res) => {
           { key: 'F', label: 'Feminino', color: '#EC4899' }
         ]
       },
-      baseURL: process.env.NODE_ENV === 'production' 
-        ? 'https://absenteeism-8zvdzym4z-claudia-azevedos-projects.vercel.app' 
-        : `http://localhost:${process.env.PORT || 3001}`
+      baseURL: 'https://absenteeism-8zvdzym4z-claudia-azevedos-projects.vercel.app'
     }
   });
 });
 
-// 📊 ENDPOINT PRINCIPAL - DASHBOARD DATA (USANDO SQL DIRETO)
+// DASHBOARD-DATA - Endpoint principal atualizado
 router.get('/dashboard-data', async (req, res) => {
   try {
     const startTime = Date.now();
-
-    // Usar pool de conexão SQL direto (sem cliente Supabase)
     const pool = req.pool;
 
-    // Buscar dados de todas as views em SQL puro
-    const queries = {
-      resumo: 'SELECT * FROM vw_dashboard_resumo',
-      absenteismoGenero: 'SELECT * FROM vw_absenteismo_genero_idade',
-      turnover: 'SELECT * FROM vw_turnover_departamento',
-      distribuicaoGenero: 'SELECT * FROM vw_distribuicao_genero',
-      absenteismo2025: 'SELECT * FROM vw_absenteismo_2025 LIMIT 12',
-      tiposFaltas: 'SELECT * FROM vw_tipos_faltas',
-      cidAfastamentos: 'SELECT * FROM vw_cid_afastamentos LIMIT 10',
-      funcionariosProdutivos: 'SELECT * FROM vw_funcionarios_produtivos LIMIT 50'
-    };
+    // Usar nossas views reais
+    const dashboardQuery = `
+      SELECT 
+        secao,
+        dados
+      FROM vw_dashboard_completo
+      ORDER BY 
+        CASE secao 
+          WHEN 'kpis' THEN 1
+          WHEN 'ausencias_departamento' THEN 2  
+          WHEN 'turnover_departamento' THEN 3
+          ELSE 4
+        END
+    `;
 
-    // Executar todas as queries em paralelo
-    const [
-      resumoResult,
-      absenteismoGeneroResult,
-      turnoverResult,
-      distribuicaoGeneroResult,
-      absenteismo2025Result,
-      tiposFaltasResult,
-      cidAfastamentosResult,
-      funcionariosProdutivosResult
-    ] = await Promise.all([
-      pool.query(queries.resumo),
-      pool.query(queries.absenteismoGenero),
-      pool.query(queries.turnover),
-      pool.query(queries.distribuicaoGenero),
-      pool.query(queries.absenteismo2025),
-      pool.query(queries.tiposFaltas),
-      pool.query(queries.cidAfastamentos),
-      pool.query(queries.funcionariosProdutivos)
-    ]);
-
+    const result = await pool.query(dashboardQuery);
     const queryTime = Date.now() - startTime;
-    
-    // Extrair dados das responses
-    const resumo = resumoResult.rows || [];
-    const absenteismoGenero = absenteismoGeneroResult.rows || [];
-    const turnoverDepartamento = turnoverResult.rows || [];
-    const distribuicaoGenero = distribuicaoGeneroResult.rows || [];
-    const absenteismo2025 = absenteismo2025Result.rows || [];
-    const tiposFaltas = tiposFaltasResult.rows || [];
-    const cidAfastamentos = cidAfastamentosResult.rows || [];
-    const funcionariosProdutivos = funcionariosProdutivosResult.rows || [];
 
-    // Processar dados do resumo para KPIs (COM VERIFICAÇÃO SEGURA)
-    const kpis = {};
-    if (resumo && Array.isArray(resumo)) {
-      resumo.forEach(item => {
-        if (item && item.metrica && typeof item.metrica === 'string') {
-          const key = item.metrica.toLowerCase().replace(/\s+/g, '_').replace(/[áàâã]/g, 'a').replace(/[éê]/g, 'e').replace(/[í]/g, 'i').replace(/[óô]/g, 'o').replace(/[ú]/g, 'u');
-          kpis[key] = {
-            valor: item.valor || '0',
-            unidade: item.unidade || '',
-            tendencia: item.tendencia || '→',
-            variacao: item.variacao || '0%'
-          };
-        }
-      });
-    }
+    // Organizar dados por seção
+    const dashboardData = {};
+    result.rows.forEach(row => {
+      dashboardData[row.secao] = row.dados;
+    });
 
-    // Calcular totais para contexto
-    const totalFuncionarios = distribuicaoGenero.reduce((sum, item) => sum + (parseInt(item.total_funcionarios) || 0), 0);
-    const totalFaltas = absenteismoGenero.reduce((sum, item) => sum + (parseInt(item.total_faltas) || 0), 0);
+    // Garantir estrutura mínima
+    const responseData = {
+      kpis: dashboardData.kpis || {
+        media_ausencias_mes: 0,
+        media_dias_perdidos_mes: 0,
+        fopag_medio_mes: 0,
+        absenteismo_medio: 0,
+        turnover_percentual: 0
+      },
+      ausencias_departamento: dashboardData.ausencias_departamento || [],
+      turnover_departamento: dashboardData.turnover_departamento || [],
+      
+      // Dados adicionais de gênero (baseados nos funcionários reais)
+      distribuicao_genero: await getDistribuicaoGenero(pool),
+      
+      // Metadata
+      metadata: {
+        performance: {
+          queryTime: `${queryTime}ms`,
+          timestamp: new Date().toISOString()
+        },
+        fonte: 'Dados reais - Jan/Abr 2025',
+        totalRegistros: 29998,
+        totalFuncionarios: 507
+      }
+    };
 
     res.json({
       success: true,
-      data: {
-        // KPIs principais (baseados na view vw_dashboard_resumo)
-        kpis: {
-          funcionariosAtivos: totalFuncionarios,
-          taxaAbsenteismo: kpis.taxa_absenteismo_geral?.valor || '8.5',
-          horasPlanejadas: kpis.horas_planejadas_2025?.valor || '40,776',
-          mediaIdade: kpis.media_de_idade?.valor || '34.7',
-          eficienciaOperacional: kpis.eficiencia_operacional?.valor || '91.2',
-          departamentosAtivos: kpis.departamentos_ativos?.valor || turnoverDepartamento.length.toString(),
-          totalFaltas: totalFaltas,
-          tendencia: '↑',
-          variacao: '+2.3%'
-        },
-
-        // Charts preparados para o frontend
-        charts: {
-          // Gráfico de pizza - Distribuição por gênero
-          distribuicaoGenero: distribuicaoGenero.map(item => ({
-            name: item.genero === 'M' ? 'Masculino' : 'Feminino',
-            value: parseInt(item.total_funcionarios) || 0,
-            percentage: parseFloat(item.percentual || 0),
-            color: item.genero === 'M' ? '#3B82F6' : '#EC4899',
-            faltas: parseInt(item.total_faltas) || 0,
-            indiceAbsenteismo: parseFloat(item.indice_absenteismo) || 0
-          })),
-
-          // Gráfico de barras - Absenteísmo por gênero e idade
-          absenteismoIdade: absenteismoGenero.map(item => ({
-            faixaIdade: item.faixa_idade,
-            genero: item.genero,
-            funcionarios: parseInt(item.total_funcionarios) || 0,
-            faltas: parseInt(item.total_faltas) || 0,
-            indice: parseFloat(item.indice_absenteismo || 8.5),
-            percentualComFaltas: parseFloat(item.percentual_com_faltas || 25),
-            color: item.genero === 'M' ? '#3B82F6' : '#EC4899'
-          })),
-
-          // Gráfico de barras - Turnover por departamento
-          turnoverDepartamento: turnoverDepartamento.map(item => ({
-            departamento: item.nome_departamento || item.departamento || 'Não informado',
-            total: parseInt(item.total_funcionarios) || parseInt(item.funcionarios) || 0,
-            ativos: parseInt(item.funcionarios_ativos) || 0,
-            inativos: parseInt(item.funcionarios_inativos) || 0,
-            turnover: parseFloat(item.percentual_turnover || item.turnover || 35.5),
-            idadeMedia: parseFloat(item.idade_media || 35),
-            color: '#F59E0B'
-          })),
-
-          // Gráfico de linha - Tendência mensal 2025
-          tendenciaMensal: absenteismo2025.map(item => ({
-            mes: item.mes,
-            mesNome: item.mes_nome || `Mês ${item.mes}`,
-            funcionarios: parseInt(item.funcionarios_ativos) || parseInt(item.funcionarios) || 971,
-            faltas: parseInt(item.total_faltas) || 0,
-            indice: parseFloat(item.indice_absenteismo || 8.5),
-            mediaHoras: parseFloat(item.media_horas_funcionario || 7.2)
-          })),
-
-          // Gráfico de barras horizontais - Top CIDs
-          topCIDs: cidAfastamentos.slice(0, 10).map(item => ({
-            cid: item.cid_afastamento || item.cod_cid,
-            descricao: item.descricao_cid || 'Não informado',
-            ocorrencias: parseInt(item.total_ocorrencias) || 0,
-            funcionarios: parseInt(item.funcionarios_afetados) || 1,
-            percentual: parseFloat(item.percentual_do_total || 0),
-            diasPerdidos: parseInt(item.total_dias_perdidos) || 0,
-            mediaDias: parseFloat(item.media_dias_afastamento) || 0
-          }))
-        },
-
-        // Tabelas para o dashboard
-        tabelas: {
-          // Top funcionários produtivos
-          funcionariosProdutivos: funcionariosProdutivos.slice(0, 20).map(item => ({
-            idFuncionario: item.id_funcionario,
-            matricula: item.matricula,
-            genero: item.genero,
-            idade: parseInt(item.idade),
-            registros: parseInt(item.total_registros) || 31,
-            horasPlanas: parseInt(item.horas_planejadas) || 240,
-            faltas: parseInt(item.total_faltas) || 0,
-            eficiencia: parseFloat(item.eficiencia_percentual || 95.5),
-            nivel: (parseFloat(item.eficiencia_percentual) || 95.5) >= 95 ? 'Excelente' : 
-                   (parseFloat(item.eficiencia_percentual) || 95.5) >= 85 ? 'Bom' : 
-                   (parseFloat(item.eficiencia_percentual) || 95.5) >= 70 ? 'Regular' : 'Baixo'
-          })),
-
-          // Tipos de faltas detalhado
-          tiposFaltas: tiposFaltas.map(item => ({
-            tipo: item.tipo_falta,
-            ocorrencias: parseInt(item.total_ocorrencias) || 0,
-            funcionarios: parseInt(item.funcionarios_afetados) || 0,
-            percentual: parseFloat(item.percentual_do_total || 0),
-            minutosPerdidos: parseInt(item.total_minutos_perdidos || item.minutosperdidos) || 0,
-            mediaMinutos: parseInt(item.media_minutos_por_falta || item.mediaMinutos) || 32,
-            custoEstimado: (parseInt(item.total_minutos_perdidos || item.minutosperdidos) || 0) * 0.5
-          }))
-        },
-
-        // Dados brutos para filtros no frontend
-        dadosBrutos: {
-          absenteismoGenero: absenteismoGenero,
-          turnoverDepartamento: turnoverDepartamento,
-          distribuicaoGenero: distribuicaoGenero,
-          funcionariosProdutivos: funcionariosProdutivos
-        },
-
-        // Metadata
-        metadata: {
-          fonte: 'Supabase Views Otimizadas',
-          totalRegistros: {
-            funcionarios: totalFuncionarios,
-            faltas: totalFaltas,
-            departamentos: turnoverDepartamento.length,
-            cids: cidAfastamentos.length
-          },
-          performance: {
-            queryTime: `${queryTime}ms`,
-            cacheStatus: 'fresh'
-          },
-          viewsUtilizadas: [
-            'vw_dashboard_resumo',
-            'vw_absenteismo_genero_idade', 
-            'vw_turnover_departamento',
-            'vw_distribuicao_genero',
-            'vw_absenteismo_2025',
-            'vw_tipos_faltas',
-            'vw_cid_afastamentos',
-            'vw_funcionarios_produtivos'
-          ],
-          ultimaAtualizacao: new Date().toISOString()
-        },
-
-        timestamp: new Date().toISOString()
-      }
+      data: responseData
     });
 
   } catch (error) {
-    console.error('[LOVABLE DASHBOARD ERROR]:', error);
+    console.error('[DASHBOARD-DATA ERROR]:', error);
     res.status(500).json({
       success: false,
       error: {
@@ -292,15 +141,18 @@ router.get('/dashboard-data', async (req, res) => {
   }
 });
 
-// 📊 ENDPOINTS INDIVIDUAIS PARA FLEXIBILIDADE (USANDO SQL DIRETO)
-
+// RESUMO - Endpoint simplificado
 router.get('/resumo', async (req, res) => {
   try {
-    const result = await req.pool.query('SELECT * FROM vw_dashboard_resumo');
+    const result = await req.pool.query(`
+      SELECT dados as resumo 
+      FROM vw_dashboard_completo 
+      WHERE secao = 'kpis'
+    `);
     
     res.json({
       success: true,
-      data: result.rows || []
+      data: result.rows[0]?.resumo || {}
     });
   } catch (error) {
     res.status(500).json({
@@ -310,13 +162,32 @@ router.get('/resumo', async (req, res) => {
   }
 });
 
+// ABSENTEISMO-GENERO - Baseado em funcionários reais
 router.get('/absenteismo-genero', async (req, res) => {
   try {
-    const result = await req.pool.query('SELECT * FROM vw_absenteismo_genero_idade ORDER BY genero, faixa_idade');
+    const query = `
+      SELECT 
+        f.genero,
+        COUNT(DISTINCT f.id_funcionario) as total_funcionarios,
+        COUNT(CASE WHEN rh.cod_situacao IN (29, 37, 36, 15, 38, 65, 107, 88, 109) THEN 1 END) as total_ausencias,
+        ROUND(
+          CASE WHEN COUNT(CASE WHEN rh.cod_situacao = 1 THEN 1 END) > 0
+          THEN (COUNT(CASE WHEN rh.cod_situacao IN (29, 37, 36, 15, 38, 65, 107, 88, 109) THEN 1 END)::DECIMAL / 
+                COUNT(CASE WHEN rh.cod_situacao = 1 THEN 1 END)) * 100
+          ELSE 0 END, 1
+        ) as percentual_absenteismo
+      FROM funcionarios f
+      LEFT JOIN registro_horas rh ON f.id_funcionario = rh.id_funcionario
+      WHERE f.genero IN ('M', 'F')
+      GROUP BY f.genero
+      ORDER BY f.genero
+    `;
+    
+    const result = await req.pool.query(query);
     
     res.json({
       success: true,
-      data: result.rows || []
+      data: result.rows
     });
   } catch (error) {
     res.status(500).json({
@@ -326,13 +197,18 @@ router.get('/absenteismo-genero', async (req, res) => {
   }
 });
 
+// TURNOVER - Usar nossa view real
 router.get('/turnover', async (req, res) => {
   try {
-    const result = await req.pool.query('SELECT * FROM vw_turnover_departamento ORDER BY percentual_turnover DESC');
+    const result = await req.pool.query(`
+      SELECT dados as turnover 
+      FROM vw_dashboard_completo 
+      WHERE secao = 'turnover_departamento'
+    `);
     
     res.json({
       success: true,
-      data: result.rows || []
+      data: result.rows[0]?.turnover || []
     });
   } catch (error) {
     res.status(500).json({
@@ -342,13 +218,14 @@ router.get('/turnover', async (req, res) => {
   }
 });
 
+// DISTRIBUICAO-GENERO - Dados reais de funcionários
 router.get('/distribuicao-genero', async (req, res) => {
   try {
-    const result = await req.pool.query('SELECT * FROM vw_distribuicao_genero ORDER BY total_funcionarios DESC');
+    const result = await getDistribuicaoGenero(req.pool);
     
     res.json({
       success: true,
-      data: result.rows || []
+      data: result
     });
   } catch (error) {
     res.status(500).json({
@@ -358,13 +235,29 @@ router.get('/distribuicao-genero', async (req, res) => {
   }
 });
 
+// CID-AFASTAMENTOS - Baseado em códigos reais de situação
 router.get('/cid-afastamentos', async (req, res) => {
   try {
-    const result = await req.pool.query('SELECT * FROM vw_cid_afastamentos ORDER BY total_ocorrencias DESC LIMIT 10');
+    const query = `
+      SELECT 
+        cod_situacao as codigo,
+        descr_cod_situacao as descricao,
+        COUNT(*) as total_ocorrencias,
+        COUNT(DISTINCT id_funcionario) as funcionarios_afetados,
+        ROUND(AVG(carga_horaria_hs), 2) as media_horas
+      FROM registro_horas
+      WHERE cod_situacao IN (29, 37, 36, 15, 38, 65, 107, 88, 109)
+        AND descr_cod_situacao IS NOT NULL
+      GROUP BY cod_situacao, descr_cod_situacao
+      ORDER BY total_ocorrencias DESC
+      LIMIT 10
+    `;
+    
+    const result = await req.pool.query(query);
     
     res.json({
       success: true,
-      data: result.rows || []
+      data: result.rows
     });
   } catch (error) {
     res.status(500).json({
@@ -374,19 +267,20 @@ router.get('/cid-afastamentos', async (req, res) => {
   }
 });
 
-// 🔍 ENDPOINT DE DEBUG PARA TESTAR CONEXÃO (USANDO SQL DIRETO)
+// TEST-CONNECTION - Testar nossas views reais
 router.get('/test-connection', async (req, res) => {
   try {
     const startTime = Date.now();
-    
     const pool = req.pool;
 
-    // Testar cada view individualmente
+    // Testar nossas views reais
     const tests = [
-      { name: 'vw_dashboard_resumo', query: 'SELECT COUNT(*) as count FROM vw_dashboard_resumo' },
-      { name: 'vw_absenteismo_genero_idade', query: 'SELECT COUNT(*) as count FROM vw_absenteismo_genero_idade' },
+      { name: 'vw_dashboard_completo', query: 'SELECT COUNT(*) as count FROM vw_dashboard_completo' },
+      { name: 'vw_kpis_dashboard', query: 'SELECT COUNT(*) as count FROM vw_kpis_dashboard' },
+      { name: 'vw_ausencias_departamento', query: 'SELECT COUNT(*) as count FROM vw_ausencias_departamento' },
       { name: 'vw_turnover_departamento', query: 'SELECT COUNT(*) as count FROM vw_turnover_departamento' },
-      { name: 'vw_distribuicao_genero', query: 'SELECT COUNT(*) as count FROM vw_distribuicao_genero' }
+      { name: 'registro_horas', query: 'SELECT COUNT(*) as count FROM registro_horas' },
+      { name: 'funcionarios', query: 'SELECT COUNT(*) as count FROM funcionarios' }
     ];
 
     const results = {};
@@ -416,6 +310,11 @@ router.get('/test-connection', async (req, res) => {
         performance: {
           totalTime: `${totalTime}ms`,
           timestamp: new Date().toISOString()
+        },
+        baseInfo: {
+          totalRegistros: results.registro_horas?.count || '0',
+          totalFuncionarios: results.funcionarios?.count || '0',
+          viewsDisponiveis: Object.keys(results).filter(k => results[k].status === 'success').length
         }
       }
     });
@@ -427,5 +326,30 @@ router.get('/test-connection', async (req, res) => {
     });
   }
 });
+
+// Função auxiliar para distribuição por gênero
+async function getDistribuicaoGenero(pool) {
+  try {
+    const query = `
+      SELECT 
+        genero,
+        COUNT(*) as total,
+        ROUND((COUNT(*)::DECIMAL / (SELECT COUNT(*) FROM funcionarios WHERE genero IN ('M', 'F'))) * 100, 1) as percentual
+      FROM funcionarios 
+      WHERE genero IN ('M', 'F')
+      GROUP BY genero
+      ORDER BY genero
+    `;
+    
+    const result = await pool.query(query);
+    return result.rows;
+  } catch (error) {
+    console.error('Erro ao buscar distribuição por gênero:', error);
+    return [
+      { genero: 'M', total: 0, percentual: 0 },
+      { genero: 'F', total: 0, percentual: 0 }
+    ];
+  }
+}
 
 module.exports = router;
