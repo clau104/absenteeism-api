@@ -1,0 +1,8 @@
+node_modules
+.env
+*.log
+.DS_Store
+server_backup.js
+server_original_backup.js
+scripts/
+README.md
