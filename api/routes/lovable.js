@@ -61,7 +61,7 @@ router.get('/config', (req, res) => {
           { key: 'F', label: 'Feminino', color: '#EC4899' }
         ]
       },
-      baseURL: 'https://absenteeism-8zvdzym4z-claudia-azevedos-projects.vercel.app'
+      baseURL: 'https://absenteeism-api-claudia-azevedos-projects.vercel.app'
     }
   });
 });
